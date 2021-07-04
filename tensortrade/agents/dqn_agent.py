@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import random
 import numpy as np
 import tensorflow as tf
@@ -35,19 +36,21 @@ class DQNAgent(Agent):
 
     def __init__(self,
                  env: 'TradingEnv',
-                 policy_network: tf.keras.Model = None):
+                 policy_network: tf.keras.Model = None,
+                 policy_network_path: str = ''):
         self.env = env
         self.n_actions = env.action_space.n
         self.observation_shape = env.observation_space.shape
 
-        self.policy_network = policy_network or self._build_policy_network()
-
-        self.target_network = tf.keras.models.clone_model(self.policy_network)
-        self.target_network.trainable = False
+        self.policy_network = policy_network or self._build_policy_network(policy_network_path)
+        self._sync_model()
 
         self.env.agent_id = self.id
 
-    def _build_policy_network(self):
+    def _build_policy_network(self, path: str = ''):
+        if path and os.path.exists(path):
+            return self.restore(path)
+
         network = tf.keras.Sequential([
             tf.keras.layers.InputLayer(input_shape=self.observation_shape),
             tf.keras.layers.Conv1D(filters=64, kernel_size=6, padding="same", activation="tanh"),
@@ -61,20 +64,25 @@ class DQNAgent(Agent):
 
         return network
 
-    def restore(self, path: str, **kwargs):
-        self.policy_network = tf.keras.models.load_model(path)
+    def _sync_model(self):
         self.target_network = tf.keras.models.clone_model(self.policy_network)
         self.target_network.trainable = False
+
+    def restore(self, path: str, **kwargs):
+        print('restoring model from: ', path)
+        return tf.keras.models.load_model(path)
 
     def save(self, path: str, **kwargs):
         episode: int = kwargs.get('episode', None)
 
         if episode:
-            filename = "policy_network__" + self.id[:7] + "__" + datetime.now().strftime("%Y%m%d_%H%M%S") + ".hdf5"
+            filename = "policy_network__" + self.id[:7] + "__" + str(episode) + ".hdf5"
         else:
             filename = "policy_network__" + self.id[:7] + "__" + datetime.now().strftime("%Y%m%d_%H%M%S") + ".hdf5"
 
-        self.policy_network.save(path + filename)
+        network_path = os.path.join(path, filename)
+        print('saving model to: ', network_path)
+        self.policy_network.save(network_path)
 
     def get_action(self, state: np.ndarray, **kwargs) -> int:
         threshold: float = kwargs.get('threshold', 0)
@@ -144,7 +152,7 @@ class DQNAgent(Agent):
         if n_steps and not n_episodes:
             n_episodes = np.iinfo(np.int32).max
 
-        print('====      AGENT ID: {}      ===='.format(self.id))
+        print('====     AGENT ID: {}      ===='.format(self.id))
 
         while episode < n_episodes and not stop_training:
             state = self.env.reset()
@@ -179,8 +187,7 @@ class DQNAgent(Agent):
                     )
 
                 if steps_done % update_target_every == 0:
-                    self.target_network = tf.keras.models.clone_model(self.policy_network)
-                    self.target_network.trainable = False
+                    self._sync_model()
 
             is_checkpoint = save_every and episode % save_every == 0
 
